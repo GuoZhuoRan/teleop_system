@@ -1,0 +1,11 @@
+version: "3.8"
+services:
+  teleop-server:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+    environment:
+      - TELEOP_BACKEND=mock
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
