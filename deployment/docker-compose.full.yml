@@ -55,7 +55,7 @@ services:
         --robot_usd Franka/franka.usd 
         --ee_frame panda_hand
         --headless
-        --no-livestream
+        --enable-livestream
       "
     depends_on:
       - teleop-server
