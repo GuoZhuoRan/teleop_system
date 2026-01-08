@@ -56,6 +56,20 @@ class IsaacSimTCPClient:
         self.world = World(stage_units_in_meters=1.0)
         self.world.scene.add_default_ground_plane()
         
+        # Add a camera for livestreaming
+        from omni.isaac.core.prims import XFormPrim
+        from pxr import Gf, UsdGeom
+        
+        # Create a camera prim
+        stage = self.world.stage
+        camera_path = "/World/Camera_01"
+        camera = UsdGeom.Camera.Define(stage, camera_path)
+        camera.CreateFocalLengthAttr(24)
+        
+        # Position the camera to look at the robot
+        cam_prim = XFormPrim(camera_path)
+        cam_prim.set_world_pose(position=np.array([2.0, 2.0, 1.5]), orientation=np.array([0.5, -0.5, 0.5, -0.5])) # Look at origin
+        
         assets_root = get_assets_root_path()
         if not assets_root:
             print("Warning: Could not find Nucleus assets root. Using local if available or failing.")
