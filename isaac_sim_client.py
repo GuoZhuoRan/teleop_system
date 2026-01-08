@@ -28,6 +28,18 @@ if args.headless:
 
 simulation_app = SimulationApp(config)
 
+# Explicitly enable the WebRTC extension if it wasn't loaded by config
+from omni.isaac.core.utils.extensions import enable_extension
+try:
+    # Try enabling the newer extension name first (Isaac Sim 2022.2+)
+    enable_extension("omni.services.streamclient.webrtc")
+except Exception:
+    print("Could not enable omni.services.streamclient.webrtc, trying omni.kit.livestream.webrtc...")
+    try:
+        enable_extension("omni.kit.livestream.webrtc")
+    except Exception as e:
+        print(f"Warning: Could not enable WebRTC extension: {e}")
+
 # 3. Import Isaac Core (must be after SimulationApp)
 from omni.isaac.core import World
 from omni.isaac.core.utils.nucleus import get_assets_root_path
@@ -56,20 +68,40 @@ class IsaacSimTCPClient:
         self.world = World(stage_units_in_meters=1.0)
         self.world.scene.add_default_ground_plane()
         
+        # Add a Dome Light to ensure the scene is lit
+        from omni.isaac.core.utils.stage import add_reference_to_stage
+        from omni.isaac.core.utils.nucleus import get_assets_root_path
+        from pxr import UsdLux, Sdf
+        
+        # Create a simple Dome Light
+        stage = self.world.stage
+        light_prim = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
+        light_prim.CreateIntensityAttr(1000)
+
         # Add a camera for livestreaming
         from omni.isaac.core.prims import XFormPrim
         from pxr import Gf, UsdGeom
         
         # Create a camera prim
-        stage = self.world.stage
         camera_path = "/World/Camera_01"
         camera = UsdGeom.Camera.Define(stage, camera_path)
         camera.CreateFocalLengthAttr(24)
         
         # Position the camera to look at the robot
         cam_prim = XFormPrim(camera_path)
-        cam_prim.set_world_pose(position=np.array([2.0, 2.0, 1.5]), orientation=np.array([0.5, -0.5, 0.5, -0.5])) # Look at origin
+        # Position: x=2, y=0, z=1.5 (side view), looking at 0,0,0.5
+        cam_prim.set_world_pose(position=np.array([2.0, 0.0, 1.5]), orientation=np.array([0.5, -0.5, 0.5, -0.5]))
         
+        # Force the default viewport to use this camera
+        # Note: In headless mode with SimulationApp, we need to ensure the render product is attached to livestream
+        try:
+            from omni.isaac.core.utils.viewports import set_camera_view
+            # Set camera view using the camera we just created
+            # This helper function updates the active viewport
+            set_camera_view(eye=np.array([2.0, 2.0, 1.5]), target=np.array([0, 0, 0.5]), camera_prim_path=camera_path)
+        except Exception as e:
+            print(f"Warning: Could not set viewport camera: {e}")
+
         assets_root = get_assets_root_path()
         if not assets_root:
             print("Warning: Could not find Nucleus assets root. Using local if available or failing.")
@@ -147,8 +179,17 @@ class IsaacSimTCPClient:
         if self.world:
             self.world.reset()
 
+        last_log_time = time.time()
         while simulation_app.is_running():
             self.world.step(render=True)
+            
+            # Periodic logging
+            if time.time() - last_log_time > 5.0:
+                if self.robot:
+                    pos = self.robot.get_world_pose()[0]
+                    print(f"[Sim Running] Robot Base Pos: {pos}, Target: {self.target_pos}")
+                last_log_time = time.time()
+
             if self.running and self.controller:
                 # Apply IK
                 action = self.controller.compute_inverse_kinematics(

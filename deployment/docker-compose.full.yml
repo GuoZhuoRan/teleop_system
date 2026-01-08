@@ -13,12 +13,6 @@ services:
     ports:
       - "8000:8000"
       - "9000:9000"
-      # Isaac Sim Livestream / WebRTC Ports
-      - "47995-48012:47995-48012/tcp"
-      - "47995-48012:47995-48012/udp"
-      - "8899:8899"
-      - "8111-8120:8111-8120/udp"
-      - "8111-8120:8111-8120/tcp"
     restart: unless-stopped
     networks:
       - teleop-network
@@ -38,6 +32,13 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       - ISAAC_SIM_HOST=teleop-server
       - ISAAC_SIM_PORT=9000
+    ports:
+      # Isaac Sim Livestream / WebRTC Ports
+      - "47995-48012:47995-48012/tcp"
+      - "47995-48012:47995-48012/udp"
+      - "8899:8899"
+      - "8111-8120:8111-8120/udp"
+      - "8111-8120:8111-8120/tcp"
     volumes:
       - ../isaac_sim_client.py:/workspace/isaac_sim_client.py:ro
       - ../server:/workspace/server:ro
