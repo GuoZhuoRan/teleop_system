@@ -22,23 +22,48 @@ if args.headless:
     config["width"] = 1280
     config["height"] = 720
     config["renderer"] = "RayTracedLighting"
-    # Enable WebRTC Livestreaming
-    config["enable_livestream"] = True
-    config["livestream_type"] = "webrtc"
 
 simulation_app = SimulationApp(config)
 
-# Explicitly enable the WebRTC extension if it wasn't loaded by config
+import carb
+settings = carb.settings.get_settings()
+
+# Enable livestream extensions
 from omni.isaac.core.utils.extensions import enable_extension
 try:
-    # Try enabling the newer extension name first (Isaac Sim 2022.2+)
+    print("Enabling livestream extensions...")
     enable_extension("omni.services.streamclient.webrtc")
-except Exception:
-    print("Could not enable omni.services.streamclient.webrtc, trying omni.kit.livestream.webrtc...")
+    enable_extension("omni.kit.livestream.webrtc")
+    enable_extension("omni.services.streaming.manager")
+    print("✅ Livestream extensions enabled")
+except Exception as e:
+    print(f"❌ Warning: Could not enable livestream extensions: {e}")
+
+if args.headless:
+    # WebRTC Livestream Configuration
+    settings.set_string("/exts/omni.kit.livestream.app/primaryStream/streamType", "webrtc")
+    settings.set_int("/app/livestream/port", 8899)  # Main HTTP port for WebRTC
+    settings.set_int("/app/livestream/websocket", 8011)  # WebSocket signaling
+    settings.set_bool("/app/livestream/skipCapture", False)
+    settings.set_bool("/exts/omni.kit.livestream.app/primaryStream/allowDynamicResize", True)
+    
+    # Native streaming fallback ports
+    settings.set_int("/exts/omni.kit.livestream.app/primaryStream/signalPort", 49100)
+    settings.set_int("/exts/omni.kit.livestream.app/primaryStream/streamPort", 47998)
+
+    public_ip = None
     try:
-        enable_extension("omni.kit.livestream.webrtc")
-    except Exception as e:
-        print(f"Warning: Could not enable WebRTC extension: {e}")
+        import urllib.request
+
+        with urllib.request.urlopen(
+            "http://169.254.169.254/latest/meta-data/public-ipv4", timeout=1.0
+        ) as resp:
+            public_ip = resp.read().decode("utf-8").strip()
+    except Exception:
+        public_ip = None
+
+    if public_ip:
+        settings.set_string("/exts/omni.kit.livestream.app/primaryStream/publicIp", public_ip)
 
 # 3. Import Isaac Core (must be after SimulationApp)
 from omni.isaac.core import World
@@ -68,36 +93,23 @@ class IsaacSimTCPClient:
         self.world = World(stage_units_in_meters=1.0)
         self.world.scene.add_default_ground_plane()
         
-        # Add a Dome Light to ensure the scene is lit
-        from omni.isaac.core.utils.stage import add_reference_to_stage
-        from omni.isaac.core.utils.nucleus import get_assets_root_path
-        from pxr import UsdLux, Sdf
-        
-        # Create a simple Dome Light
+        from pxr import UsdLux, UsdGeom
+
         stage = self.world.stage
         light_prim = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
         light_prim.CreateIntensityAttr(1000)
 
-        # Add a camera for livestreaming
         from omni.isaac.core.prims import XFormPrim
-        from pxr import Gf, UsdGeom
         
-        # Create a camera prim
         camera_path = "/World/Camera_01"
         camera = UsdGeom.Camera.Define(stage, camera_path)
         camera.CreateFocalLengthAttr(24)
         
-        # Position the camera to look at the robot
         cam_prim = XFormPrim(camera_path)
-        # Position: x=2, y=0, z=1.5 (side view), looking at 0,0,0.5
         cam_prim.set_world_pose(position=np.array([2.0, 0.0, 1.5]), orientation=np.array([0.5, -0.5, 0.5, -0.5]))
         
-        # Force the default viewport to use this camera
-        # Note: In headless mode with SimulationApp, we need to ensure the render product is attached to livestream
         try:
             from omni.isaac.core.utils.viewports import set_camera_view
-            # Set camera view using the camera we just created
-            # This helper function updates the active viewport
             set_camera_view(eye=np.array([2.0, 2.0, 1.5]), target=np.array([0, 0, 0.5]), camera_prim_path=camera_path)
         except Exception as e:
             print(f"Warning: Could not set viewport camera: {e}")

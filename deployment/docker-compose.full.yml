@@ -32,6 +32,7 @@ services:
       - ISAAC_SIM_HOST=localhost
       - ISAAC_SIM_PORT=9000
     # Use host networking for WebRTC performance and simplicity
+    # This exposes: 8899 (WebRTC HTTP), 8011 (WebSocket), 47998, 49100
     network_mode: host
     volumes:
       - ../isaac_sim_client.py:/workspace/isaac_sim_client.py:ro
@@ -47,13 +48,14 @@ services:
       bash -c "
       echo 'Waiting for teleop-server to be ready...' &&
       sleep 10 &&
-      echo 'Starting Isaac Sim client...' &&
+      echo 'Starting Isaac Sim client (without livestream)...' &&
       /isaac-sim/python.sh /workspace/isaac_sim_client.py 
         --host localhost 
         --port 9000 
         --robot_usd Franka/franka.usd 
         --ee_frame panda_hand
         --headless
+        --no-livestream
       "
     depends_on:
       - teleop-server
