@@ -46,11 +46,12 @@ services:
       echo 'Waiting for teleop-server to be ready...' &&
       sleep 10 &&
       echo 'Starting Isaac Sim client...' &&
-      python /workspace/isaac_sim_client.py 
+      /isaac-sim/python.sh /workspace/isaac_sim_client.py 
         --host teleop-server 
         --port 9000 
         --robot_usd Franka/franka.usd 
         --ee_frame panda_hand
+        --headless
       "
     depends_on:
       - teleop-server
