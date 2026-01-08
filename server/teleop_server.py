@@ -204,7 +204,12 @@ def get_server() -> TeleoperationServer:
     if _server_instance is None:
         import os
         backend = os.getenv("TELEOP_BACKEND", "mock")
-        _server_instance = TeleoperationServer(backend_type=backend)
+        backend_config = {}
+        if backend.lower() == "isaac":
+            isaac_host = os.getenv("TELEOP_ISAAC_HOST", "0.0.0.0")
+            isaac_port = int(os.getenv("TELEOP_ISAAC_PORT", "9000"))
+            backend_config = {"host": isaac_host, "port": isaac_port}
+        _server_instance = TeleoperationServer(backend_type=backend, backend_config=backend_config)
         _server_instance.initialize()
     return _server_instance
 
