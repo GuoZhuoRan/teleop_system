@@ -283,9 +283,12 @@ class KeyboardTeleopClient:
     def test_connection(self) -> bool:
         """Test connection to server"""
         try:
-            response = requests.get(f"{self.server_url}/", timeout=2)
+            print(f"DEBUG: Connecting to {self.server_url}/ ...")
+            response = requests.get(f"{self.server_url}/", timeout=5)
+            print(f"DEBUG: Status code: {response.status_code}")
             return response.status_code == 200
-        except:
+        except Exception as e:
+            print(f"DEBUG: Connection error: {e}")
             return False
 
 

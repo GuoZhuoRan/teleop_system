@@ -94,7 +94,7 @@ class TeleoperationServer:
         
         if not safety_active:
             return {
-                'status': 'error',
+                'status': 'ignored',
                 'message': 'Safety gate not active',
                 'safety_active': False,
                 'violations': {}
