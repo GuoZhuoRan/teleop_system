@@ -4,4 +4,4 @@ venv/
 env/
 
 # Internal Documents
-trae/documents
+.trae/documents
