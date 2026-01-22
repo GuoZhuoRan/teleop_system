@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
     parser.add_argument("--backend", default="mock", 
-                       choices=["mock", "isaac"], help="Backend type")
+                       choices=["mock", "isaac", "mujoco"], help="Backend type")
     parser.add_argument("--no-server", action="store_true",
                        help="Initialize only, don't run server")
     

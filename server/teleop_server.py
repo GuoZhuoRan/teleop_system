@@ -1,8 +1,10 @@
 """
 Main teleoperation server using FastAPI
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Dict, List, Optional, Any
 import numpy as np
@@ -12,11 +14,13 @@ import threading
 import time
 from datetime import datetime
 import json
+import os
 
 from models import DeltaCommand, RobotState, TeleopStatus, WorkspaceLimits
 from safety_gate import SafetyGate
 from control_logic import TeleoperationController
 from robot_backend import RobotBackend, BackendFactory, BackendStatus
+from web_support import AuthManager, SessionRecorder, mjpeg_stream, render_status_frame
 
 
 class TeleoperationServer:
@@ -185,6 +189,11 @@ app = FastAPI(title="Teleoperation Server",
               version="1.0.0",
               lifespan=lifespan)
 
+_repo_dir = os.path.dirname(os.path.dirname(__file__))
+_web_dir = os.path.join(_repo_dir, "client", "web")
+if os.path.isdir(_web_dir):
+    app.mount("/web", StaticFiles(directory=_web_dir, html=True), name="web")
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -196,6 +205,9 @@ app.add_middleware(
 
 # Global server instance
 _server_instance: Optional[TeleoperationServer] = None
+_auth = AuthManager()
+_recorder = SessionRecorder()
+_ws_sessions: Dict[str, str] = {}
 
 
 def get_server() -> TeleoperationServer:
@@ -286,31 +298,137 @@ async def websocket_endpoint(websocket: WebSocket):
     WebSocket endpoint for real-time teleoperation
     """
     await websocket.accept()
+    token = websocket.query_params.get("token")
+    token_info = _auth.verify_token(token)
+    if _auth.auth_enabled() and not token_info:
+        await websocket.close(code=4401)
+        return
+    username = token_info.username if token_info else "anonymous"
+    session_id = _recorder.start(username=username)
+    if token:
+        _ws_sessions[token] = session_id
+
     server = get_server()
-    
+
+    def get_video_state():
+        pos, ori = (None, None)
+        if server.backend and server.backend.is_connected():
+            pos, ori = server.backend.get_current_pose()
+        if pos is None:
+            pos = np.array([0.0, 0.0, 0.0])
+        if ori is None:
+            ori = np.array([1.0, 0.0, 0.0, 0.0])
+        return {
+            "position": [float(pos[0]), float(pos[1]), float(pos[2])],
+            "orientation": [float(ori[0]), float(ori[1]), float(ori[2]), float(ori[3])],
+            "status": server.backend.get_status().get("status") if server.backend else "none",
+            "timestamp": time.time(),
+        }
+
+    async def state_loop():
+        while True:
+            status = server.get_status()
+            state = get_video_state()
+            payload = {
+                "type": "state",
+                "ts": time.time(),
+                "status": status.model_dump(),
+                "robot": state,
+            }
+            await websocket.send_json(payload)
+            _recorder.write(session_id, {"type": "state", "ts": payload["ts"], "payload": payload})
+            jpg = render_status_frame(960, 540, state)
+            _recorder.save_frame(session_id, jpg)
+            await asyncio.sleep(0.05)
+
+    state_task = asyncio.create_task(state_loop())
+
     try:
         while True:
-            # Receive command
             data = await websocket.receive_text()
-            command_dict = json.loads(data)
+            msg = json.loads(data)
+            if isinstance(msg, dict) and msg.get("type") == "delta":
+                command_dict = msg.get("payload") or {}
+            else:
+                command_dict = msg
+
             command = DeltaCommand(**command_dict)
-            
-            # Process command
+            current_time = time.time()
+            if command.timestamp <= 0:
+                command.timestamp = current_time
+
             result = server.process_command(command)
-            
-            # Send response
-            await websocket.send_json(result)
-            
+            ack = {"type": "ack", "ts": time.time(), "result": result}
+            await websocket.send_json(ack)
+            _recorder.write(session_id, {"type": "command", "ts": ack["ts"], "command": command_dict, "result": result})
+
     except WebSocketDisconnect:
-        print(f"[WebSocket] Client disconnected")
-    except Exception as e:
-        print(f"[WebSocket] Error: {e}")
+        pass
+    except Exception:
         await websocket.close(code=1011)
+    finally:
+        state_task.cancel()
+        _recorder.stop(session_id)
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/v1/auth/login")
+async def login(req: LoginRequest, request: Request):
+    if _auth.auth_enabled() and not _auth.validate_login(req.username, req.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = _auth.issue_token(req.username)
+    host = request.headers.get("host")
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    ws_scheme = "wss" if scheme == "https" else "ws"
+    ws_url = f"{ws_scheme}://{host}/ws/v1/teleop?token={token}"
+    return {"token": token, "ws_url": ws_url, "video_url": f"/api/v1/video/mjpeg?token={token}"}
+
+
+@app.post("/api/v1/auth/logout")
+async def logout(token: str):
+    _auth.revoke(token)
+    session_id = _ws_sessions.pop(token, None)
+    if session_id:
+        _recorder.stop(session_id)
+    return {"status": "ok"}
+
+
+@app.get("/api/v1/video/mjpeg")
+async def video_mjpeg(token: str):
+    if _auth.auth_enabled() and not _auth.verify_token(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    server = get_server()
+
+    def get_state():
+        pos, ori = (None, None)
+        if server.backend and server.backend.is_connected():
+            pos, ori = server.backend.get_current_pose()
+        if pos is None:
+            pos = np.array([0.0, 0.0, 0.0])
+        if ori is None:
+            ori = np.array([1.0, 0.0, 0.0, 0.0])
+        return {
+            "position": [float(pos[0]), float(pos[1]), float(pos[2])],
+            "orientation": [float(ori[0]), float(ori[1]), float(ori[2]), float(ori[3])],
+            "status": server.backend.get_status().get("status") if server.backend else "none",
+            "timestamp": time.time(),
+        }
+
+    return StreamingResponse(
+        mjpeg_stream(get_state_fn=get_state, fps=10),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 @app.get("/")
 async def root():
-    """Root endpoint with API information"""
+    index_path = os.path.join(_web_dir, "index.html")
+    if os.path.isfile(index_path):
+        return FileResponse(index_path)
     return {
         "name": "Teleoperation Server",
         "version": "1.0.0",
@@ -318,9 +436,12 @@ async def root():
             "command": "POST /api/v1/command",
             "status": "GET /api/v1/status",
             "statistics": "GET /api/v1/statistics",
-            "websocket": "WS /ws/v1/teleop"
+            "websocket": "WS /ws/v1/teleop",
+            "login": "POST /api/v1/auth/login",
+            "video": "GET /api/v1/video/mjpeg",
+            "ui": "GET /web/index.html",
         },
-        "documentation": "/docs"
+        "documentation": "/docs",
     }
 
 
@@ -337,7 +458,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Teleoperation Server")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host address")
     parser.add_argument("--port", type=int, default=8000, help="Port number")
-    parser.add_argument("--backend", type=str, default="mock", help="Backend type (mock or isaac)")
+    parser.add_argument("--backend", type=str, default="mock", help="Backend type (mock, isaac, or mujoco)")
     
     args = parser.parse_args()
     

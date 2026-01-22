@@ -82,7 +82,7 @@ class BackendFactory:
         Create a robot backend based on type
         
         Args:
-            backend_type: Type of backend ('mock', 'isaac')
+            backend_type: Type of backend ('mock', 'isaac', 'mujoco')
             **kwargs: Backend-specific parameters
             
         Returns:
@@ -96,6 +96,11 @@ class BackendFactory:
         elif backend_type.lower() == 'isaac':
             from backends.isaac_backend import IsaacSimBackend
             return IsaacSimBackend(**kwargs)
+
+        elif backend_type.lower() == 'mujoco':
+            from backends.mujoco_backend import MujocoRobotBackend
+            name = kwargs.pop('name', 'mujoco_robot')
+            return MujocoRobotBackend(name=name, **kwargs)
             
         else:
             raise ValueError(f"Unknown backend type: {backend_type}")
